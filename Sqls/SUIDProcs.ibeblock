@@ -1,0 +1,427 @@
+﻿/********************************************************************************/
+/*  Following IBEBlock is used by IBExpert to produce text of SUID procedures   */
+/*                                                                              */
+/*              !!! DO NOT CHANGE INPUT/OUTPUT PARAMETER NAMES !!!              */
+/********************************************************************************/
+
+execute ibeblock (
+  TableName       variant comment 'Table name AS IS',
+  TableNameFmt    variant comment 'Formatted table name (quoted, if necessary)',
+  FieldNames      variant comment 'Array of field names (names are quoted, if necessary)',
+  FieldTypes      variant comment 'Array of field types',
+  FieldDomains    variant comment 'Array of field domain names (names are quoted, if necessary)',
+  FieldFlags      variant comment 'Array of field flags. Possible flags:
+                                   K - field is a primary key field
+                                   S - field is marked for select (SELECT procedure)
+                                   I - field is marked for insert (INSERT procedure)
+                                   U - field is marked for update (UPDATE procedure)
+                                   N - field is marked for insert (INSERT/UPDATE procedure)
+                                   P - field is marked for update (INSERT/UPDATE procedure)',
+  DatabaseID      variant comment 'ID of associated IBExpert database')
+RETURNS (
+  SelectSPText       variant = ''    comment 'SELECT procedure text',
+  InsertSPText       variant = ''    comment 'INSERT procedure text',
+  UpdateSPText       variant = ''    comment 'UPDATE procedure text',
+  DeleteSPText       variant = ''    comment 'DELETE procedure text',
+  InsertUpdateSPText variant = ''    comment 'INSERT or UPDATE procedure text',
+  DoNotFormat        boolean = FALSE comment 'If TRUE, no additional formatting will be performed by IBExpert')
+as
+begin
+  -- Uncomment following line to avoid additional formatting of procedure text
+  -- DoNotFormat = TRUE;
+
+  DBConn = ibec_GetDefaultConnection();
+
+  sNoPrimaryKey = '/* There is no primary key defined for ' + TableNameFmt + ' table */';
+  sNoFieldsSelected = '/* There are no fields selected */';
+
+  ServerVersion = ibec_ibe_GetDatabaseProp(DatabaseID, 'ServerVersion');
+  CRLF = ibec_CRLF();
+  CommaCRLF = ',' + CRLF;
+  CreateProcedure = 'create or alter procedure ';
+  CreateView = 'create or alter view ';
+
+  WhereClause = '';
+  WhereClauseWithAlias = '';
+  WhereClauseInsUpd = '';
+
+  SelectOutputParams = '';
+  SelectFields = '';
+  SelectIntoClause = '';
+
+  InsertInputParams = '';
+  InsertInto = '';
+  InsertValues = '';
+
+  UpdateInputParams = '';
+  UpdateFields = '';
+
+  DelInputParams = '';
+
+  InsUpdInputParams = '';
+  InsUpdInputValues = '';
+  InsUpdInto = '';
+  InsUpdValues = '';
+  InsUpdFields = '';
+  KeyFieldsForMatching = '';
+  KeyCount = 0;
+  KeyFldIdx = -1;
+  KeyOutName = 'OUT_ID';
+  KeyName = '';
+  AllFields = '';
+  AllParams = '';
+  AllInsUpdInputParams = '';
+  AllInsUpdInputParamsEx = '';
+  AllInsUpdInto = '';
+  AllInsUpdValues = '';
+  AllInsUpdValuesExchange = '';
+  AllInsUpdValuesExchange2 = '';
+  AllInsUpdValuesExchangeEx = '';
+  AllInsUpdFields = '';
+  InsUpdInputParamsEdit = '';
+  AllInsUpdValuesEdit = '';
+  ViewSelectFields = '';
+  ViewFields = '';
+  VersionAuthorSelect = '';
+  VersionAuthorOnDelete = CRLF;
+  VersionAuthorGrant = '';
+  ParamTypes = null;
+  foreach (FieldNames as Field key FldIdx) do
+  begin
+    Flags = FieldFlags[FldIdx];
+    ParamTypes[FldIdx] = 'type of column ' + TableNameFmt + '.' + Field;
+    if (ibec_Pos('K', Flags) > 0) then
+    begin
+      KeyCount = KeyCount + 1;
+      KeyFldIdx = FldIdx;
+      KeyName = Field;
+    end;
+    if (Field = 'MODUSER') then
+    begin
+      VersionAuthorSelect =
+        '  -- автор версии ' + CRLF +
+        '  if (:AOPERATION <> 3) then ' + CRLF +
+        '    MODUSER = SYS_USERID(); '
+        + CRLF;
+      VersionAuthorOnDelete = ', ' + CRLF +
+        '        a.MODUSER = :MODUSER ' + CRLF;
+      VersionAuthorGrant =
+        'grant execute on function SYS_USERID to procedure ' + TableNameFmt + '$;' + CRLF;
+    end;
+  end;
+
+  foreach (FieldNames as Field key FldIdx) do
+  begin
+    Flags = FieldFlags[FldIdx];
+    AllFields = ibec_IIF(AllFields = '', '', ', ') + Field;
+    AllParams = ibec_IIF(AllFields = '', '', ', ') + ':' +Field;
+    AllInsUpdInputParams .= ibec_IIF(AllInsUpdInputParams = '', '', CommaCRLF) + '  ' + Field + ' ' + ParamTypes[FldIdx];
+    AllInsUpdInputParamsEx .= ibec_IIF(AllInsUpdInputParamsEx = '', '', CommaCRLF) + '  ' + Field + ' ';
+--    if (FieldDomains[FldIdx] = 'DGUID' or FieldDomains[FldIdx] = 'DGUID_NN' or FieldDomains[FldIdx] = 'MODUSER') then
+--      AllInsUpdInputParamsEx .= 'DGUID_STRING';
+--    else
+      AllInsUpdInputParamsEx .= ParamTypes[FldIdx];
+    AllInsUpdInto .= ibec_IIF(AllInsUpdInto = '', '', ',') + Field;
+
+    if (ibec_Pos('K', Flags) > 0) then
+      AllInsUpdValues .= ibec_IIF(AllInsUpdValues = '', '', ',') + ':' + KeyOutName;
+    else if (Field = 'MODDT') then
+      AllInsUpdValues .= ibec_IIF(AllInsUpdValues = '', '', ',') + 'current_timestamp';
+    else if ((Field = 'LOG_USER' or Field = 'AUSER') and (FieldDomains[FldIdx] = 'DUSERNAME')) then
+      AllInsUpdValues .= ibec_IIF(AllInsUpdValues = '', '', ',') + 'current_user';
+    else if (Field = 'STATE') then
+      AllInsUpdValues .= ibec_IIF(AllInsUpdValues = '', '', ',') + 'BitSet(coalesce(:STATE,0),2,0)';
+    else
+      AllInsUpdValues .= ibec_IIF(AllInsUpdValues = '', '', ',') + ':' + Field;
+
+    if (ibec_Pos('K', Flags) > 0) then
+      AllInsUpdValuesExchange .= ibec_IIF(AllInsUpdValuesExchange = '', '', ',') + ':' + KeyOutName;
+    else
+      AllInsUpdValuesExchange .= ibec_IIF(AllInsUpdValuesExchange = '', '', ',') + ':' + Field;
+    AllInsUpdValuesExchange2 .= ibec_IIF(AllInsUpdValuesExchange2 = '', '', ',') + ':' + Field;
+--    if (FieldDomains[FldIdx] = 'DGUID' or FieldDomains[FldIdx] = 'DGUID_NN' or FieldDomains[FldIdx] = 'MODUSER') then
+--      AllInsUpdValuesExchangeEx .= ibec_IIF(AllInsUpdValuesExchangeEx = '', '', ', ') + 'char_to_uuid(:' + Field + ')';
+--    else
+      AllInsUpdValuesExchangeEx .= ibec_IIF(AllInsUpdValuesExchangeEx = '', '', ',') + ':' + Field;
+    if ((ibec_Pos('N', Flags) > 0 and ibec_Pos('P', Flags) > 0) or (ibec_Pos('K', Flags) > 0)) then
+    begin
+      InsUpdInputParams .= ibec_IIF(InsUpdInputParams = '', '', CommaCRLF) + '    ' + Field + ' ' + ParamTypes[FldIdx];
+      if (Field = 'MODDT' or Field = 'LOG_USER' or Field = 'MODUSER') then
+         InsUpdInputParams .= ' = null';
+      if (Field <> 'MODDT' and Field <> 'LOG_USER' and Field <> 'MODUSER') then
+      begin
+         InsUpdInputParamsEdit .= ibec_IIF(InsUpdInputParamsEdit = '', '', CommaCRLF) + '    ' + Field + ' ' + ParamTypes[FldIdx];
+         InsUpdInputValues .= ibec_IIF(InsUpdInputValues = '', '', ',') + ':' + Field;
+      end
+    end
+    else
+      InsUpdInputValues .= ibec_IIF(InsUpdInputValues = '', '', ',') + 'null';
+
+    if (ibec_Pos('K', Flags) = 0) then
+    begin
+      if (Field = 'MODDT') then
+        AllInsUpdFields .= ibec_IIF(AllInsUpdFields = '', '', CommaCRLF) + '        a.' + Field + ' = current_timestamp';
+      else if ((Field = 'LOG_USER' or Field = 'AUSER') and (FieldDomains[FldIdx] = 'DUSERNAME')) then
+        AllInsUpdFields .= ibec_IIF(AllInsUpdFields = '', '', CommaCRLF) + '        a.' + Field + ' = current_user';
+      else if (Field = 'MODUSER') then
+        AllInsUpdFields .= ibec_IIF(AllInsUpdFields = '', '', CommaCRLF) + '        a.' + Field + ' = :' + Field;
+      else if (Field = 'STATE') then
+        AllInsUpdFields .= ibec_IIF(AllInsUpdFields = '', '', CommaCRLF) + '        a.' + Field + ' = BitSet(coalesce(:' + Field + ',a.' + Field + '),2,0)';
+      else
+        AllInsUpdFields .= ibec_IIF(AllInsUpdFields = '', '', CommaCRLF) + '        a.' + Field + ' = coalesce(:' + Field + ',a.' + Field + ')';
+    end
+
+    -- WHERE clause and DELETE procedure parts
+    if (ibec_Pos('K', Flags) > 0) then
+    begin
+      WhereClause .= ibec_IIF(WhereClause = '', '', ' and ') + '(' + Field + ' = :' + Field + ')';
+      WhereClauseWithAlias .= ibec_IIF(WhereClauseWithAlias = '', '', ' and ') + '(a.' + Field + ' = :' + KeyOutName + ')';
+      WhereClauseInsUpd .= ibec_IIF(WhereClauseInsUpd = '', 'a.', ',a.') + Field + ' = :' + KeyOutName;
+      KeyFieldsForMatching .= ibec_IIF(KeyFieldsForMatching = '', '', ',') + Field;
+      DelInputParams .= ibec_IIF(DelInputParams = '', '', CommaCRLF) + '    ' + Field + ' ' + ParamTypes[FldIdx];
+    end;
+
+    -- SELECT procedure parts
+    if (ibec_Pos('S', Flags) > 0) then
+    begin
+      SelectOutputParams .= ibec_IIF(SelectOutputParams = '', '', CommaCRLF) + '    ' + Field + ' ' + ParamTypes[FldIdx];
+      SelectFields       .= ibec_IIF(SelectFields = '', '', CommaCRLF) + '             ' + Field;
+      SelectIntoClause   .= ibec_IIF(SelectIntoClause = '', '', CommaCRLF) + '           :' + Field;
+    end;
+
+    -- INSERT procedure parts
+    if (ibec_Pos('I', Flags) > 0) then
+    begin
+      InsertInputParams .= ibec_IIF(InsertInputParams = '', '', CommaCRLF) + '    ' + Field + ' ' + ParamTypes[FldIdx];
+      InsertInto        .= ibec_IIF(InsertInto = '', '', CommaCRLF) + '    ' + Field;
+      InsertValues      .= ibec_IIF(InsertValues = '', '', CommaCRLF) + '    :' + Field;
+    end;
+
+    -- UPDATE procedure parts
+    if ((ibec_Pos('K', Flags) > 0) or (ibec_Pos('U', Flags) > 0))  then
+    begin
+      UpdateInputParams .= ibec_IIF(UpdateInputParams = '', '', CommaCRLF) + '    ' + Field + ' ' + ParamTypes[FldIdx];
+      if (ibec_Pos('U', Flags) > 0)  then
+        UpdateFields .= ibec_IIF(UpdateFields = '', '', CommaCRLF) + '      ' + Field + ' = :' + Field;
+    end;
+
+    -- INSERT or UPDATE procedure parts
+    if ((ibec_Pos('K', Flags) > 0) or (ibec_Pos('N', Flags) > 0) or (ibec_Pos('P', Flags) > 0))  then
+    begin
+      if (ibec_Pos('N', Flags) > 0)  then
+      begin
+        InsUpdInto .= ibec_IIF(InsUpdInto = '', '', ',') + Field;
+        if (Field = KeyName) then
+          InsUpdValues .= ibec_IIF(InsUpdValues = '', '', ',') + ':' + KeyOutName;
+        else
+          InsUpdValues .= ibec_IIF(InsUpdValues = '', '', ',') + ':' + Field;
+      end;
+      if (ibec_Pos('P', Flags) > 0)  then
+        InsUpdFields .= ibec_IIF(InsUpdFields = '', '', CommaCRLF) + '        ' + Field + ' = :' + Field;
+    end;
+
+    -- VIEW PART
+    ViewSelectFields .= ibec_IIF(ViewSelectFields = '', '', CommaCRLF);
+    ViewFields .= ibec_IIF(ViewFields = '', '', CommaCRLF) + '    ' + Field;
+--    if (FieldDomains[FldIdx] = 'DGUID' or FieldDomains[FldIdx] = 'DGUID_NN' or FieldDomains[FldIdx] = 'DVERSION_AUTHOR') then
+--    begin
+--      ViewSelectFields .= '    uuid_to_char(t.' + Field + ') as ' + Field + CommaCRLF;
+--      ViewFields .= ibec_IIF(ViewFields = '', '', CommaCRLF) + '    ' + Field + '$';
+--      ViewSelectFields .= '    t.' + Field + ' as ' + Field + '$';
+--    end
+--    else
+      ViewSelectFields .= '    t.' + Field;
+  end;
+  KeyFieldsForMatching = ibec_Trim(KeyFieldsForMatching);
+
+  if (SelectOutputParams <> '') then
+    SelectSPText = CreateProcedure + ibec_FormatIdent(TableName + '_SEL') + CRLF +
+                   ')returns(' + SelectOutputParams + CRLF +
+                   ')as' + CRLF +
+                   'begin' + CRLF +
+                   '  for select ' + ibec_Trim(SelectFields) + CRLF +
+                   '      from ' + TableNameFmt + CRLF +
+                   '      into ' + ibec_Trim(SelectIntoClause) + CRLF +
+                   '  do' + CRLF +
+                   '  begin' + CRLF +
+                   '    suspend;' + CRLF +
+                   '  end' + CRLF +
+                   'end';
+  else
+    SelectSPText = sNoFieldsSelected;
+
+  if (InsertInputParams <> '') then
+    InsertSPText = CreateProcedure + ibec_FormatIdent(TableName + '_INS') + ' (' + CRLF +
+                   InsertInputParams + CRLF +
+                   ')as' + CRLF +
+                   'begin' + CRLF +
+                   '  insert into ' + TableNameFmt + ' (' + CRLF +
+                   InsertInto + ')' + CRLF +
+                   '  values (' + CRLF +
+                   InsertValues + ');' + CRLF +
+                   'end';
+  else
+    InsertSPText = sNoFieldsSelected;
+
+  if ((UpdateInputParams <> '')  and (WhereClause <> '') and (UpdateFields <> '')) then
+    UpdateSPText = CreateProcedure + ibec_FormatIdent(TableName + '_UPD') + ' (' + CRLF +
+                   UpdateInputParams + CRLF +
+                   ')as' + CRLF +
+                   'begin' + CRLF +
+                   '  update ' + TableNameFmt + CRLF +
+                   '  set ' + ibec_Trim(UpdateFields) + CRLF +
+                   '  where ' + WhereClause + ';' + CRLF +
+                   'end';
+  else if (WhereClause = '') then
+    UpdateSPText = sNoPrimaryKey;
+  else if (UpdateFields = '') then
+    UpdateSPText = sNoFieldsSelected;
+
+  if ((DelInputParams <> '') and (WhereClause <> '')) then
+    DeleteSPText = CreateProcedure + ibec_FormatIdent(TableName + '_DEL') + ' (' + CRLF +
+                   DelInputParams + CRLF +
+                   ')as' + CRLF +
+                   'begin' + CRLF +
+                   '  delete from ' + TableNameFmt + CRLF +
+                   '  where ' + WhereClause + ';' + CRLF +
+                   'end';
+  else if (WhereClause = '') then
+    DeleteSPText = sNoPrimaryKey;
+  else if (DelInputParams = '') then
+    DeleteSPText = sNoFieldsSelected;
+
+  if ((InsUpdInputParams <> '') and (WhereClause <> '')) then
+  begin
+    if (KeyCount > 1) then
+      InsertUpdateSPText = 'Таблица "' + TableNameFmt + '" не соответствует политике';
+    else
+    begin
+      if (FieldDomains[KeyFldIdx] = 'DGUID_NN') then
+        GenStr = '    :OUT_ID = coalesce(:ID, gen_uuid());';
+      else
+        GenStr = '    :OUT_ID = coalesce(:ID, gen_id(GEN_'||TableNameFmt||'_ID,1));';
+      InsertUpdateSPText = --'set term ^ ;' + CRLF +
+                           CreateProcedure + TableNameFmt + '$(' + CRLF +
+                           '    AOPERATION DINT,' + CRLF +
+                           InsUpdInputParams + CRLF +
+                           ')returns(' + CRLF +
+                           '  OUT_ID ' + ParamTypes[KeyFldIdx] + CRLF +
+                           ')as' + CRLF +
+                           'begin' + CRLF +
+                           '  OUT_ID = :ID;' + CRLF +
+                           VersionAuthorSelect +
+                           '  if (:AOPERATION = 0) then -- вставка' + CRLF +
+                           '  begin' + CRLF +
+                           GenStr + CRLF +
+                           '    insert into ' + TableNameFmt + '(' + AllInsUpdInto + ')' + CRLF +
+                           '    values (' + AllInsUpdValues + ');' + CRLF +
+                           '  end' + CRLF +
+                           '  else' + CRLF +
+                           '  if (:AOPERATION = 1) then -- изменение' + CRLF +
+                           '  begin' + CRLF +
+                           '    update ' + TableNameFmt + ' a' + CRLF +
+                           '    set ' + ibec_Trim(AllInsUpdFields) + CRLF +
+                           '    where (' + WhereClauseInsUpd + ');' + CRLF +
+                           '  end' + CRLF +
+                           '  else' + CRLF +
+                           '  if (:AOPERATION = 2) then -- удаление' + CRLF +
+                           '  begin' + CRLF +
+                           '    update ' + TableNameFmt + ' a' + CRLF +
+                           '    set a.STATE = BitSet(BitSet(a.STATE,0,1),2,0),' + CRLF +
+                           '        a.MODDT = current_timestamp' +
+                           VersionAuthorOnDelete +
+                           '    where (' + WhereClauseInsUpd + ');' + CRLF +
+                           '  end' + CRLF +
+                           '  else' + CRLF +
+                           '  if (:AOPERATION = 3) then -- обмен' + CRLF +
+                           '  begin' + CRLF +
+                           '    update or insert into ' + TableNameFmt + '(' + AllInsUpdInto + ')' + CRLF +
+                           '    values(' + AllInsUpdValuesExchange + ')' + CRLF +
+                           '    matching(' + KeyFieldsForMatching + ');' + CRLF +
+                           '  end' + CRLF +
+                           '  else' + CRLF +
+                           '    exception EX_COMMON ''Некорректный код операции: ''|| :AOPERATION;' + CRLF +
+                           '--  if ( AOPERATION in (0,1,2) ) then' + CRLF +
+                           '--    execute procedure BUFF$SEND(??,:OUT_ID);' + CRLF +
+                           '  suspend;' + CRLF +
+                           'end;' + CRLF +
+--                           'set term ; ^' + CRLF +
+                           '----------' + CRLF +
+--                           'comment on procedure ' + TableNameFmt + '$ is ' + CRLF +
+--                           '''Процедура базовой логики для таблицы ' + TableNameFmt + ''';' + CRLF +
+                           'comment on parameter ' + TableNameFmt + '$.AOPERATION is ' + CRLF +
+                           '''0 - вставка, 1 - изменение, 2 - удаление, 3 - репликация'';' + CRLF +
+                           'grant all on ' + TableNameFmt + ' to procedure ' + TableNameFmt + '$;' + CRLF +
+                           'grant execute on procedure BUFF$SEND to procedure ' + TableNameFmt + '$;' + CRLF +
+                           'grant execute on procedure ' + TableNameFmt + '$ to IT;' + CRLF +
+                           VersionAuthorGrant +
+                           '---------------------------------' + CRLF + CRLF +
+--                           'set term ^ ;' + CRLF +
+                           CreateProcedure + 'EX_' + TableNameFmt + '(' + CRLF +
+                           AllInsUpdInputParamsEx + CRLF +
+                           ')as' + CRLF +
+                           '  declare variable OUT_ID ' + ParamTypes[KeyFldIdx] + ';' + CRLF +
+                           'begin' + CRLF +
+                           '  execute procedure ' + TableNameFmt + '$(3,' + CRLF +
+                           '    ' + AllInsUpdValuesExchangeEx + CRLF +
+                           '  )returning_values :OUT_ID;' + CRLF +
+                           'end;' + CRLF +
+--                           'set term ; ^' + CRLF +
+                           '----------' + CRLF +
+                           'grant execute on procedure ' + TableNameFmt + '$ to procedure EX_' + TableNameFmt + ';' + CRLF +
+                           'grant execute on procedure EX_' + TableNameFmt + ' to IT,OBMEN;' + CRLF +
+                           'comment on procedure EX_' + TableNameFmt + ' is ' + CRLF +
+                           '''Процедура обмена c магазином для таблицы ' + TableNameFmt + ''';' + CRLF +
+                           '---------------------------------' + CRLF + CRLF +
+--                           'set term ^ ;' + CRLF +
+                           CreateProcedure + 'EX$' + TableNameFmt + '(' + CRLF +
+                           '  AOPERATION DINT,' + CRLF +
+                           AllInsUpdInputParams + CRLF +
+                           ')as' + CRLF +
+                           '  declare variable OUT_ID ' + ParamTypes[KeyFldIdx] + ';' + CRLF +
+                           'begin' + CRLF +
+                           '  execute procedure ' + TableNameFmt + '$(:AOPERATION,' + CRLF +
+                           '    ' + AllInsUpdValuesExchange2 + CRLF +
+                           '  )returning_values :OUT_ID;' + CRLF +
+                           'end;' + CRLF +
+--                           'set term ; ^' + CRLF +
+                           '----------' + CRLF +
+                           'grant execute on procedure ' + TableNameFmt + '$ to procedure EX$' + TableNameFmt + ';' + CRLF +
+                           'grant execute on procedure EX$' + TableNameFmt + ' to IT,OBMEN;' + CRLF +
+                           'comment on procedure EX$' + TableNameFmt + ' is ' + CRLF +
+                           '''Приемная процедура для таблицы ' + TableNameFmt + ''';' + CRLF +
+                           '---------------------------------' + CRLF + CRLF +
+--                           'set term ^ ;' + CRLF +
+                           CreateProcedure + TableNameFmt + '$EDIT(' + CRLF +
+                           '    AOPERATION DINT,' + CRLF +
+                           InsUpdInputParamsEdit + CRLF +
+                           ')returns(' + CRLF +
+                           '  OUT_ID ' + ParamTypes[KeyFldIdx] + CRLF +
+                           ')as' + CRLF +
+                           'begin' + CRLF +
+                           '  execute procedure ' + TableNameFmt + '$(:AOPERATION,' + CRLF +
+                           '    ' + InsUpdInputValues + CRLF +
+                           '  )returning_values :OUT_ID;' + CRLF +
+                           '  suspend;' + CRLF +
+                           'end;' + CRLF +
+--                           'set term ; ^' + CRLF +
+                           '----------' + CRLF +
+--                           'comment on procedure ' + TableNameFmt + '$EDIT is ' + CRLF +
+--                           '''Процедура бизнес логики для таблицы ' + TableNameFmt + ''';' + CRLF +
+                           'comment on parameter ' + TableNameFmt + '$EDIT.AOPERATION is ' + CRLF +
+                           '''0 - вставка, 1 - изменение, 2 - удаление'';' + CRLF +
+                           'grant execute on procedure ' + TableNameFmt + '$ to procedure ' + TableNameFmt + '$EDIT;' + CRLF +
+                           'grant execute on procedure ' + TableNameFmt + '$EDIT to IT,RWORKER;' + CRLF +
+                           '---------------------------------' + CRLF + CRLF +
+                           CreateView + TableNameFmt + '$VW' + CRLF +
+                           'as select * from ' + TableNameFmt + ' t;' + CRLF +
+                           '----------' + CRLF +
+                           'grant select on ' + TableNameFmt + ' to view ' + TableNameFmt + '$VW;' + CRLF +
+                           'grant select on ' + TableNameFmt + '$VW to IT,RWORKER;' + CRLF;
+    end
+  end
+  else if (WhereClause = '') then
+    InsertUpdateSPText = sNoPrimaryKey;
+  else if (InsUpdInputParams = '') then
+    InsertUpdateSPText = sNoFieldsSelected;
+end
